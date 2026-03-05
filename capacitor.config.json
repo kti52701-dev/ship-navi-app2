@@ -1,0 +1,21 @@
+{
+  "appId": "com.shipnavi.app",
+  "appName": "선박항법",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "Geolocation": {
+      "plistUsageDescription": "선박 위치 추적을 위해 GPS를 사용합니다."
+    },
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#1a2a3a",
+      "showSpinner": false
+    }
+  }
+}
