@@ -2231,8 +2231,79 @@ function requestIOSSensorPerm(){
   showToast('🧭 나침반 + 가속도계 활성화');
 }
 
+
+// ═══════════════════════════════════════════════════════
+// 캐패시터 네이티브 GPS 브릿지
+// 네이티브 앱이면 Capacitor.Geolocation 사용
+// 웹 브라우저면 navigator.geolocation 사용
+// ═══════════════════════════════════════════════════════
+var _capGeo = null;  // 캐패시터 지오로케이션 플러그인
+var _isNative = false;  // 네이티브 앱 여부
+
+function _initCapacitor(){
+  try {
+    if(window.Capacitor && window.Capacitor.isNativePlatform()){
+      _isNative = true;
+      _capGeo = window.Capacitor.Plugins.Geolocation;
+      console.log('[GPS] 네이티브 캐패시터 GPS 사용');
+    } else {
+      _isNative = false;
+      console.log('[GPS] 웹 브라우저 GPS 사용');
+    }
+  } catch(e){
+    _isNative = false;
+    console.log('[GPS] 캐패시터 없음, 웹 GPS 사용');
+  }
+}
+
+// 캐패시터 or 웹 getCurrentPosition 통합 함수
+function _getCurrentPosition(options, successCb, errorCb){
+  if(_isNative && _capGeo){
+    _capGeo.getCurrentPosition(options).then(function(pos){
+      successCb(pos);
+    }).catch(function(err){
+      if(errorCb) errorCb(err);
+    });
+  } else {
+    navigator.geolocation.getCurrentPosition(successCb, errorCb||function(){}, options);
+  }
+}
+
+// 캐패시터 or 웹 watchPosition 통합 함수
+var _capWatchId = null;
+function _watchPosition(options, successCb, errorCb){
+  if(_isNative && _capGeo){
+    _capGeo.watchPosition(options, function(pos, err){
+      if(err){ if(errorCb) errorCb(err); return; }
+      successCb(pos);
+    }).then(function(id){
+      _capWatchId = id;
+      watchId = id;
+    }).catch(function(err){
+      if(errorCb) errorCb(err);
+    });
+  } else {
+    watchId = navigator.geolocation.watchPosition(successCb, errorCb, options);
+  }
+}
+
+// 캐패시터 or 웹 clearWatch 통합 함수
+function _clearWatch(){
+  if(_isNative && _capGeo && _capWatchId !== null){
+    _capGeo.clearWatch({id: _capWatchId});
+    _capWatchId = null;
+    watchId = null;
+  } else if(watchId !== null){
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+  }
+}
+
 function startGPS(){
-  if(!navigator.geolocation){
+  // 캐패시터 초기화 (네이티브 앱이면 네이티브 GPS 사용)
+  _initCapacitor();
+
+  if(!_isNative && !navigator.geolocation){
     setGPSStatus('lost','GPS 미지원');
     return;
   }
@@ -2263,25 +2334,25 @@ function _doStartGPS(){
   startSensors();
 
   // [Step1] 캐시 즉시반환 - 카카오네비 getLastLocation 방식 (0~500ms)
-  navigator.geolocation.getCurrentPosition(
+  _getCurrentPosition(
+    {enableHighAccuracy:false,timeout:500,maximumAge:300000},
     pos=>onGPSSuccess(pos,true),
-    function(){},
-    {enableHighAccuracy:false,timeout:500,maximumAge:300000}
+    function(){}
   );
 
   // [Step2] Wi-Fi/셀룰러/네트워크 위치 (1~5초, 인천 등 실내 환경 커버)
-  navigator.geolocation.getCurrentPosition(
+  _getCurrentPosition(
+    {enableHighAccuracy:false,timeout:5000,maximumAge:5000},
     pos=>onGPSSuccess(pos,true),
-    function(){},
-    {enableHighAccuracy:false,timeout:5000,maximumAge:5000}
+    function(){}
   );
 
-  // [Step3] GPS 위성 고정밀 추적 - 포기 없이 계속 (인천 등 약신호 환경)
-  if(watchId!==null){navigator.geolocation.clearWatch(watchId);watchId=null;}
-  watchId=navigator.geolocation.watchPosition(
+  // [Step3] GPS 위성 고정밀 추적 - 포기 없이 계속 (네이티브 Fused Location)
+  _clearWatch();
+  _watchPosition(
+    {enableHighAccuracy:true,timeout:0,maximumAge:0},
     pos=>onGPSSuccess(pos,false),
-    err=>onGPSError(err),
-    {enableHighAccuracy:true,timeout:0,maximumAge:0}  // timeout:0 = 무제한 대기
+    err=>onGPSError(err)
   );
 }
 
@@ -2777,7 +2848,7 @@ function onGPSPermCheck(checked){
 function retryGPSPerm(){
   hideGPSPermModal();
   // watchPosition 재시작
-  if(watchId!==null){navigator.geolocation.clearWatch(watchId);watchId=null;}
+  _clearWatch();
   setGPSStatus('searching','📡 위치 잡는 중...');
   startGPS();
 }
@@ -2813,10 +2884,10 @@ function onGPSError(err){
       }
     }
     // watchPosition은 이미 실행 중이므로 getCurrentPosition만 재시도
-    navigator.geolocation.getCurrentPosition(
+    _getCurrentPosition(
+      {enableHighAccuracy:false,timeout:8000,maximumAge:60000},
       pos=>onGPSSuccess(pos,true),
-      function(){},
-      {enableHighAccuracy:false,timeout:8000,maximumAge:60000}
+      function(){}
     );
     return;
   }
@@ -4424,14 +4495,15 @@ document.addEventListener('DOMContentLoaded',function(){
   try{var cs=localStorage.getItem('ship_nav_last_gps_v2');if(cs)_cached=JSON.parse(cs);}catch(e){}
   if(_cached&&_cached.lat&&_cached.lng){
     _openMap(_cached.lat,_cached.lng);
-  } else if(navigator.geolocation){
+  } else {
     // 2) 시스템 GPS 캐시 시도 (최대 800ms 대기)
-    navigator.geolocation.getCurrentPosition(
+    _initCapacitor();
+    _getCurrentPosition(
+      {enableHighAccuracy:false,timeout:800,maximumAge:300000},
       function(pos){_openMap(pos.coords.latitude,pos.coords.longitude);},
-      function(){_openMap(37.456,126.705);},
-      {enableHighAccuracy:false,timeout:800,maximumAge:300000}
+      function(){_openMap(37.456,126.705);}
     );
-  } else {_openMap(37.456,126.705);}
+  }
   // 3) 500ms 후 fallback (GPS 응답 없을 때)
   setTimeout(function(){_openMap(37.456,126.705);},500);
   // GPS 고정밀 추적 시작
